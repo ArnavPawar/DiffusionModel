@@ -1,2 +1,10 @@
 # DiffusionModel
 Diffusion Model for image processing 
+
+notes and helpful links:
+
+https://medium.com/@kemalpiro/step-by-step-visual-introduction-to-diffusion-models-235942d2f15c
+
+https://www.youtube.com/watch?v=ZBKpAp_6TGI
+
+https://blog.marvik.ai/2023/11/28/an-introduction-to-diffusion-models-and-stable-diffusion/
