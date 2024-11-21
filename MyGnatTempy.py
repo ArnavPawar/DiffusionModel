@@ -22,6 +22,9 @@ class ResNetBlock(nn.Module):
     def forward(self, x):
         residual = x
         if self.channel_match is not None:
+            assert residual.shape[1] == self.channel_match.in_channels, (
+                f"Expected {self.channel_match.in_channels} channels, but got {residual.shape[1]}"
+            )
             residual = self.channel_match(residual)
         x = self.conv1(x)
         x = self.group_norm1(x)
@@ -129,20 +132,20 @@ def test_downsample_block():
     print("DownsampleBlock test passed!")
 
 class SelfAttentionBlock(nn.Module):
-    def __init__(self, embed_dim, num_heads):
+    def __init__(self, input_channels, num_heads):
         super(SelfAttentionBlock, self).__init__()
-        # Multi-Head Attention
-        self.attention = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+        self.input_channels = input_channels  # Dynamically set the input channels
+        self.attention = nn.MultiheadAttention(input_channels, num_heads, batch_first=True)
         
         # Normalization layers
-        self.layer_norm1 = nn.LayerNorm(embed_dim)
-        self.layer_norm2 = nn.LayerNorm(embed_dim)
+        self.layer_norm1 = nn.LayerNorm(input_channels)
+        self.layer_norm2 = nn.LayerNorm(input_channels)
         
         # Feedforward network
         self.feedforward = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 4),
+            nn.Linear(input_channels, input_channels * 4),
             nn.GELU(),
-            nn.Linear(embed_dim * 4, embed_dim)
+            nn.Linear(input_channels * 4, input_channels)
         )
 
     def forward(self, x):
@@ -152,9 +155,16 @@ class SelfAttentionBlock(nn.Module):
         Returns:
             Output tensor with the same shape
         """
-        # Reshape input for attention: (B, C, H, W) -> (B, H*W, C)
         B, C, H, W = x.shape
-        x = x.view(B, C, -1).permute(0, 2, 1)  # (B, H*W, C)
+
+        # Validate input dimensions
+        if C != self.input_channels:
+            raise ValueError(
+                f"Input channels (C={C}) must match attention embedding dimension (input_channels={self.input_channels})"
+            )
+        
+        # Reshape input for attention: (B, C, H, W) -> (B, H*W, C)
+        x = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
 
         # Apply LayerNorm and Multi-Head Attention
         x_norm = self.layer_norm1(x)
@@ -167,13 +177,13 @@ class SelfAttentionBlock(nn.Module):
         x = x + x_ff  # Residual connection
 
         # Reshape back to original dimensions: (B, H*W, C) -> (B, C, H, W)
-        x = x.permute(0, 2, 1).view(B, C, H, W)
+        x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)  # Back to (B, C, H, W)
         return x
-    
+
 def test_self_attention_block():
     # Parameters for testing
     batch_size = 4
-    channels = 64
+    channels = 64  # This is the number of input channels
     height = 32
     width = 32
     num_heads = 4
@@ -181,8 +191,8 @@ def test_self_attention_block():
     # Create a random input tensor
     input_tensor = torch.randn(batch_size, channels, height, width)
 
-    # Instantiate the Self-Attention Block
-    self_attention_block = SelfAttentionBlock(embed_dim=channels, num_heads=num_heads)
+    # Instantiate the Self-Attention Block with input_channels
+    self_attention_block = SelfAttentionBlock(input_channels=channels, num_heads=num_heads)
 
     # Pass the input through the Self-Attention Block
     output_tensor = self_attention_block(input_tensor)
@@ -299,8 +309,7 @@ class UNet(nn.Module):
         self.down3 = DownsampleBlock(256, 512, embed_dim)
         
         # Bottleneck with self-attention
-        self.attention = SelfAttentionBlock(embed_dim=512, num_heads=4)
-        
+        self.attention = SelfAttentionBlock(input_channels=512, num_heads=4)  # Use 512 channels to match d3's output
         # Upsampling path
         self.up3 = UpsampleBlock(512, 256, embed_dim, skip_channels=512)
         self.up2 = UpsampleBlock(256, 128, embed_dim, skip_channels=256)
